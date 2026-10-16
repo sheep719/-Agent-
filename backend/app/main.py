@@ -71,6 +71,15 @@ async def parse_endpoint(file: UploadFile = File(...)):
         resume = await parse_resume(extracted.text)
     except ValueError as exc:
         raise HTTPException(502, f"LLM 解析失败：{exc}")
+    except Exception as exc:  # LLM API 错误（余额不足 402 / 鉴权失败 401 / 限流 429 等）
+        msg = str(exc)
+        if "402" in msg or "Balance" in msg:
+            detail = "LLM 账户余额不足（402），请充值后重试，或清空 DEEPSEEK_API_KEY 使用 stub 模式"
+        elif "401" in msg:
+            detail = "LLM API key 无效（401），请检查 backend/.env 中的 DEEPSEEK_API_KEY"
+        else:
+            detail = f"LLM 调用失败：{msg[:200]}"
+        raise HTTPException(502, detail)
 
     return {
         "filename": file.filename,
