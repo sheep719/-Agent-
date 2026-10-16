@@ -75,6 +75,7 @@ curl -X POST http://127.0.0.1:8000/api/analyze -H "Content-Type: application/jso
 - [x] **D1** 仓库初始化 · 前后端骨架互相 ping 通 · LangGraph 图骨架（stub LLM）
 - [x] **D2** Agent 1：pdfplumber 解析 + Pydantic 校验重试（`POST /api/parse`，含扫描件 422 边界、双栏布局警告）
 - [x] **D3** Agent 2：JD 拆解 + 逐条比对 + 四维加权评分（`POST /api/match`，总分代码计算、证据引用、status 枚举校验）
+- [x] **D4** Agent 3 + SSE 流式 + 三 Agent 串联（`POST /api/analyze/stream`，条目级并发流式、条件边、queue 侧信道）
 - [ ] **D3** Agent 2：JD 拆解 + 四维评分 + 证据引用
 - [ ] **D4** Agent 3 + SSE 流式 + 条件边实测
 - [ ] **D5** 前端两页：上传页 + 结果页（评分卡/雷达/逐段对照）

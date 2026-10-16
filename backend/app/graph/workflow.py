@@ -12,6 +12,7 @@
 import time
 from typing import TypedDict
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.matcher_agent import match_jd
@@ -37,20 +38,25 @@ def _trace(state: PipelineState, node: str, ms: float) -> list:
 
 
 async def parser_node(state: PipelineState) -> dict:
+    if state.get("resume"):  # 幂等跳过：流式端点已预跑 Agent 1
+        return {"trace": state.get("trace", []) + [{"node": "parser", "ms": 0, "skipped_precomputed": True}]}
     t0 = time.perf_counter()
     resume = await parse_resume(state["resume_text"])
     return {"resume": resume, "trace": _trace(state, "parser", (time.perf_counter() - t0) * 1000)}
 
 
 async def matcher_node(state: PipelineState) -> dict:
+    if state.get("match"):  # 幂等跳过：流式端点已预跑 Agent 2
+        return {"trace": state.get("trace", []) + [{"node": "matcher", "ms": 0, "skipped_precomputed": True}]}
     t0 = time.perf_counter()
     match = await match_jd(state["resume"], state["jd_text"])
     return {"match": match, "trace": _trace(state, "matcher", (time.perf_counter() - t0) * 1000)}
 
 
-async def rewriter_node(state: PipelineState) -> dict:
+async def rewriter_node(state: PipelineState, config: RunnableConfig) -> dict:
     t0 = time.perf_counter()
-    rewrites = await rewrite(state["resume"], state["match"]["requirements"])
+    # config 携带 SSE queue（侧信道），rewriter 内部逐条推送；非流式调用时无 queue
+    rewrites = await rewrite(state["resume"], state["match"]["requirements"], config=config)
     return {"rewrites": rewrites, "trace": _trace(state, "rewriter", (time.perf_counter() - t0) * 1000)}
 
 

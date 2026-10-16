@@ -5,9 +5,13 @@ D1 骨架验收：
 - GET  /ping/frontend  → 反向探测前端 :3000（骨架互相 ping 通的另一半）
 - POST /api/analyze    → 跑 LangGraph 三 Agent 流水线（stub 数据；SSE 流式 D4 接入）
 """
+import asyncio
+import json
+
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from app.agents.matcher_agent import match_jd
 from app.agents.parser_agent import parse_resume
@@ -152,3 +156,120 @@ async def analyze(req: AnalyzeRequest):
         rewrites=result.get("rewrites", []),
         trace=result.get("trace", []),
     )
+
+
+@app.post("/api/analyze/stream")
+async def analyze_stream(
+    jd_text: str = Form(...),
+    file: UploadFile | None = File(None),
+    resume: str | None = Form(None),
+):
+    """三 Agent 串联 + SSE 流式：D4 核心交付
+
+    事件序列（text/event-stream）：
+      progress  - Agent 1/2 执行进度（含耗时）
+      resume    - 结构化简历 JSON
+      match     - 四维评分 + 要求清单
+      rewrite   - 改写建议逐条推送（条目级并发，完成一条推一条）
+      trace     - 全链路耗时与跳过信息（含条件边是否触发）
+      error     - 错误（流中途失败）
+      done      - 结束标记
+    """
+    if file is None and not resume:
+        raise HTTPException(400, "需要上传 PDF 文件或提供已解析的 resume JSON")
+
+    if file is not None:
+        if not (file.filename or "").lower().endswith(".pdf"):
+            raise HTTPException(400, "只支持 PDF 文件")
+        raw = await file.read()
+        if len(raw) > 10 * 1024 * 1024:
+            raise HTTPException(413, "PDF 超过 10MB 上限")
+        try:
+            extracted = extract_pdf(raw)
+        except NotTextPDFError as exc:
+            raise HTTPException(422, str(exc))
+        resume_text, warnings = extracted.text, extracted.warnings
+    else:
+        try:
+            parsed = json.loads(resume)
+            resume_text, warnings = json.dumps(parsed, ensure_ascii=False), []
+        except json.JSONDecodeError:
+            raise HTTPException(400, "resume 不是合法 JSON")
+
+    async def event_gen():
+        queue: asyncio.Queue = asyncio.Queue()
+        yield _sse("progress", {"node": "parser", "status": "running"})
+
+        try:
+            # Agent 1
+            resume_dict = await parse_resume(resume_text)
+            yield _sse("progress", {"node": "parser", "status": "done"})
+            yield _sse("resume", {"data": resume_dict, "warnings": warnings})
+
+            # Agent 2
+            yield _sse("progress", {"node": "matcher", "status": "running"})
+            match_dict = await match_jd(resume_dict, jd_text)
+            yield _sse("progress", {"node": "matcher", "status": "done"})
+            yield _sse("match", match_dict)
+
+            # 条件边判定（与 LangGraph route_after_match 同一阈值逻辑）
+            from app.schemas import SKIP_REWRITE_THRESHOLD
+            if match_dict["total_score"] > SKIP_REWRITE_THRESHOLD:
+                yield _sse("trace", {
+                    "skipped": "rewriter",
+                    "reason": f"总分 {match_dict['total_score']} > {SKIP_REWRITE_THRESHOLD}，跳过改写",
+                })
+                yield _sse("done", {"rewrites": 0})
+                return
+
+            # Agent 3（LangGraph 图执行，queue 侧信道逐条推送）
+            yield _sse("progress", {"node": "rewriter", "status": "running"})
+
+            async def run_graph():
+                config = {"configurable": {"stream_queue": queue}}
+                result = await graph.ainvoke(
+                    {"resume": resume_dict, "jd_text": jd_text,
+                     "match": match_dict, "rewrites": [], "trace": []},
+                    config=config,
+                )
+                await queue.put(None)  # 结束信号
+                return result
+
+            graph_task = asyncio.create_task(run_graph())
+
+            # 边跑边推：queue 消息即时下发；图异常立即冒出（不再被 create_task 吞掉）
+            rewrites_count = 0
+            while True:
+                get_task = asyncio.create_task(queue.get())
+                done, _ = await asyncio.wait(
+                    {get_task, graph_task}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if graph_task in done and get_task not in done:
+                    get_task.cancel()
+                    graph_task.result()  # 有异常直接抛给 except
+                    break
+                msg = await get_task
+                if msg is None:
+                    break
+                yield _sse(msg["type"], msg["data"])
+                rewrites_count += 1
+
+            if not graph_task.done():
+                await graph_task
+            result = graph_task.result()
+            yield _sse("progress", {"node": "rewriter", "status": "done", "count": rewrites_count})
+            yield _sse("trace", {"trace": result.get("trace", []), "skipped": None})
+            yield _sse("done", {"rewrites": rewrites_count})
+
+        except Exception as exc:
+            yield _sse("error", {"detail": _llm_error_detail(exc)})
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"

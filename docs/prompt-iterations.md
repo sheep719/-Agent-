@@ -65,3 +65,26 @@
 3. "每周实习 4 天"判 miss 合理（在校生身份），"能实习 3 个月"判 partial 证据引用的是教育经历（牵强）——evidence 质量待 v3 加"证据必须直接支持该条要求"约束
 
 **v3 迭代方向**：维度分与逐条分一致性校验（偏差 >20 分时以逐条加权为准重算）；evidence 相关性约束。
+
+## Agent 3 · 改写器
+
+### v1 · 2026-10-16（D1 骨架版）
+
+单次调用改写全部条目，无流式、无伦理约束（有编造风险）。
+
+### v2 · 2026-10-16（D4 做实版）
+
+**架构取舍（面试考点）——条目级并发流式**：
+- JSON 结构化输出与 token 级流式天然冲突（JSON 未闭合无法 parse）
+- 改为每条建议独立 LLM 调用 + asyncio.gather 并发，完成一条经 asyncio.Queue 侧信道推一条 SSE
+- LangGraph 节点通过 `config["configurable"]["stream_queue"]` 拿队列——同一张图，流式/非流式共用
+
+**伦理红线**：不编造。partial 基于简历素材 STAR 改写；miss 只给占位符模板（X%、N 次、【请填写】）；education 硬门槛与 bonus miss 直接跳过（改不了/编不出）。
+
+**真机实测**（2026-10-16，家教简历 × AI Agent JD）：6 条改写，partial 2 条全部基于真实素材（专业补充、Python 能力链表述），miss 4 条全部占位符模板，零编造。全链路 9.6s。
+
+**真机踩的 2 个坑（LangGraph 经验，值得写进博客）**：
+1. **流挂死**：预解析结果传进 `graph.ainvoke`，但线性图的 parser 节点仍要 `resume_text` → KeyError 被 asyncio.create_task 吞掉 → queue 永等。修复：节点幂等跳过（state 已有该节点产出则跳过）+ `asyncio.wait(FIRST_COMPLETED)` 竞争监听图任务与队列，图异常立即冒出。
+2. **config 静默丢失**：LangGraph 对节点签名做内省，`config: dict | None` 类型不对 → config 不传 → queue=None → 6 条改写算完却不推送（只发 UserWarning 不报错）。修复：`config: RunnableConfig`（langchain_core.runnables）。教训：框架的"警告"要当错误看。
+
+**v3 迭代方向**：并发节流的 semaphore（6 条并发对 DeepSeek 无压力，但换小供应商要注意）；rewritten 长度约束（部分模板偏长）。
