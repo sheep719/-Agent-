@@ -1,4 +1,4 @@
-岗位：AI 应用开发实习生（Agent 方向）
+岗位：AI Agent 开发实习生（Agent 方向）
 
 职责：
 1. 参与大模型 Agent 应用的设计与开发，包括 Prompt 工程、多 Agent 编排、工具调用
