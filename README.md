@@ -73,7 +73,7 @@ curl -X POST http://127.0.0.1:8000/api/analyze -H "Content-Type: application/jso
 ## 路线图（7 天冲刺 · 10/20 ~ 10/26）
 
 - [x] **D1** 仓库初始化 · 前后端骨架互相 ping 通 · LangGraph 图骨架（stub LLM）
-- [ ] **D2** Agent 1：pdfplumber 解析 + Pydantic 校验重试
+- [x] **D2** Agent 1：pdfplumber 解析 + Pydantic 校验重试（`POST /api/parse`，含扫描件 422 边界、双栏布局警告）
 - [ ] **D3** Agent 2：JD 拆解 + 四维评分 + 证据引用
 - [ ] **D4** Agent 3 + SSE 流式 + 条件边实测
 - [ ] **D5** 前端两页：上传页 + 结果页（评分卡/雷达/逐段对照）
@@ -85,13 +85,17 @@ curl -X POST http://127.0.0.1:8000/api/analyze -H "Content-Type: application/jso
 ```
 backend/
   app/
-    main.py            # FastAPI 入口：/health /ping/frontend /api/analyze
+    main.py            # FastAPI 入口：/health /ping/frontend /api/parse /api/analyze
     config.py          # 环境变量配置
     llm.py             # LLM 封装：stub 模式 / JSON mode / 解析重试
+    pdf.py             # pdfplumber 提取：扫描件拒绝、双栏布局警告
     schemas.py         # Pydantic 契约 + 评分权重常量
     agents/            # 三个 Agent（parser / matcher / rewriter）
     graph/workflow.py  # LangGraph StateGraph 编排 + 条件边
+  tests/               # pytest（PDF 提取 / 边界 / 契约）
 frontend/
   app/                 # Next.js App Router（page + /api/health）
   components/          # BackendStatus 后端探测卡片
+docs/
+  prompt-iterations.md # prompt 迭代日志（面试铁证）
 ```

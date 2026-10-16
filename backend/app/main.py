@@ -6,11 +6,13 @@ D1 骨架验收：
 - POST /api/analyze    → 跑 LangGraph 三 Agent 流水线（stub 数据；SSE 流式 D4 接入）
 """
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.agents.parser_agent import parse_resume
 from app.config import settings
 from app.graph.workflow import build_graph
+from app.pdf import NotTextPDFError, extract_pdf
 from app.schemas import AnalyzeRequest, AnalyzeResponse
 
 app = FastAPI(title="ResumePilot API", version="0.1.0")
@@ -45,6 +47,38 @@ async def ping_frontend():
             }
     except Exception as exc:
         return {"frontend_url": settings.frontend_url, "ok": False, "error": str(exc)}
+
+
+@app.post("/api/parse", response_model=None)
+async def parse_endpoint(file: UploadFile = File(...)):
+    """Agent 1 独立入口：上传简历 PDF → 提取文本 → LLM 结构化解析
+
+    D2 验收：用自己的简历实测，四段（教育/经历/技能/项目）解析正确
+    """
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(400, "只支持 PDF 文件")
+
+    raw = await file.read()
+    if len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(413, "PDF 超过 10MB 上限")
+
+    try:
+        extracted = extract_pdf(raw)
+    except NotTextPDFError as exc:
+        raise HTTPException(422, str(exc))
+
+    try:
+        resume = await parse_resume(extracted.text)
+    except ValueError as exc:
+        raise HTTPException(502, f"LLM 解析失败：{exc}")
+
+    return {
+        "filename": file.filename,
+        "pages": extracted.pages,
+        "warnings": extracted.warnings,
+        "resume": resume,
+        "stub_mode": not settings.api_key,
+    }
 
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
