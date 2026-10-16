@@ -84,6 +84,7 @@ curl -X POST http://127.0.0.1:8000/api/analyze -H "Content-Type: application/jso
 - [x] **D2** Agent 1：pdfplumber 解析 + Pydantic 校验重试（`POST /api/parse`，含扫描件 422 边界、双栏布局警告）
 - [x] **D3** Agent 2：JD 拆解 + 逐条比对 + 四维加权评分（`POST /api/match`，总分代码计算、证据引用、status 枚举校验）
 - [x] **D4** Agent 3 + SSE 流式 + 三 Agent 串联（`POST /api/analyze/stream`，条目级并发流式、条件边、queue 侧信道）
+- [x] **D5** 前端两页：上传页（拖拽上传 + JD 粘贴）+ 结果页（总分仪表盘 + 四维雷达 + 逐条对照 + 流式改写卡片）
 - [ ] **D3** Agent 2：JD 拆解 + 四维评分 + 证据引用
 - [ ] **D4** Agent 3 + SSE 流式 + 条件边实测
 - [ ] **D5** 前端两页：上传页 + 结果页（评分卡/雷达/逐段对照）
@@ -108,8 +109,9 @@ backend/
     mcp_server.py      # MCP server（FastMCP）：parse_resume_pdf 工具，独立进程
   tests/               # pytest（PDF 提取 / 边界 / 契约 / 路由）
 frontend/
-  app/                 # Next.js App Router（page + /api/health）
-  components/          # BackendStatus 后端探测卡片
+  app/                 # Next.js App Router：/（上传页）+ /result（结果页）+ /api/health
+  components/          # ScoreGauge 仪表盘 · RadarChart 雷达 · RequirementList 对照表 · RewriteCard 建议卡片
+  lib/                 # 类型契约 · SSE 客户端（fetch 流式）· 分析状态 store
 docs/
   prompt-iterations.md # prompt 迭代日志（面试铁证）
 ```
