@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { useAnalysis } from "@/lib/store";
 import BackendStatus from "@/components/BackendStatus";
+import HistoryPanel from "@/components/HistoryPanel";
 
 export default function UploadPage() {
   const { file, jdText, setInputs, start } = useAnalysis();
@@ -104,6 +105,7 @@ export default function UploadPage() {
       <div className="mt-10">
         <BackendStatus />
       </div>
+      <HistoryPanel />
     </main>
   );
 }

@@ -1,4 +1,30 @@
 services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      FRONTEND_URL: http://localhost:3080
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-server:3000}
+    volumes:
+      - resumepilot-data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3080:3000"
+    environment:
+      NEXT_PUBLIC_BACKEND_URL: http://localhost:8000
+    restart: unless-stopped
+    depends_on:
+      - backend
+
   langfuse-server:
     image: docker.io/langfuse/langfuse:3
     depends_on:
@@ -34,4 +60,5 @@ services:
       retries: 30
 
 volumes:
+  resumepilot-data:
   langfuse-postgres:

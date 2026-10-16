@@ -13,6 +13,7 @@ import { BACKEND_URL, streamSSE } from "./sse";
 interface AnalysisState {
   file: File | null;
   jdText: string;
+  sessionId: string;
   setInputs: (file: File | null, jdText: string) => void;
 
   progress: ProgressState;
@@ -56,6 +57,17 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
   const [started, setStarted] = useState(false);
   const ranRef = useRef(false); // 防结果页严格模式双执行重复请求
 
+  const [sessionId] = useState(() => {
+    // 浏览器持久 session ID（历史记录粒度，无登录）
+    if (typeof window === "undefined") return "ssr";
+    let sid = window.localStorage.getItem("rp_session_id");
+    if (!sid) {
+      sid = crypto.randomUUID().slice(0, 8);
+      window.localStorage.setItem("rp_session_id", sid);
+    }
+    return sid;
+  });
+
   const setInputs = useCallback((f: File | null, jd: string) => {
     setFile(f);
     setJdText(jd);
@@ -83,6 +95,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("jd_text", jdText);
+    fd.append("session_id", sessionId);
 
     try {
       await streamSSE(`${BACKEND_URL}/api/analyze/stream`, fd, (ev, data) => {
@@ -122,7 +135,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
   return (
     <Ctx.Provider
       value={{
-        file, jdText, setInputs,
+        file, jdText, setInputs, sessionId,
         progress, resume, warnings, match, rewrites, trace,
         skippedReason, error, finished, started,
         start, reset,

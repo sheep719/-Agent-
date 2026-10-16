@@ -48,4 +48,5 @@ export interface TraceEntry {
   node: string;
   ms: number;
   stub?: boolean;
+  skipped_precomputed?: boolean;
 }

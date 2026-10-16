@@ -10,9 +10,12 @@ class Settings:
 
     # 服务地址
     frontend_url: str = os.getenv("FRONTEND_URL", "http://127.0.0.1:3000")
+    # CORS：本机开发 + Docker compose 内部前端
     cors_origins: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3080",
+        "http://127.0.0.1:3080",
     ]
 
 

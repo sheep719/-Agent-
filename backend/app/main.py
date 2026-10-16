@@ -15,7 +15,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from app import observability
+from app import db, observability
 from app.agents.matcher_agent import match_jd
 from app.agents.parser_agent import parse_resume
 from app.config import settings
@@ -168,6 +168,7 @@ async def analyze_stream(
     jd_text: str = Form(...),
     file: UploadFile | None = File(None),
     resume: str | None = Form(None),
+    session_id: str = Form("anonymous"),
 ):
     """三 Agent 串联 + SSE 流式：D4 核心交付
 
@@ -226,11 +227,17 @@ async def analyze_stream(
             # 条件边判定（与 LangGraph route_after_match 同一阈值逻辑）
             from app.schemas import SKIP_REWRITE_THRESHOLD
             if match_dict["total_score"] > SKIP_REWRITE_THRESHOLD:
+                analysis_id = await db.save_analysis(
+                    session_id=session_id, filename=getattr(file, "filename", None),
+                    jd_digest=jd_text, total_score=match_dict.get("total_score", 0),
+                    rewrites_count=0, resume=resume_dict,
+                    match=match_dict, rewrites=[],
+                )
                 yield _sse("trace", {
                     "skipped": "rewriter",
                     "reason": f"总分 {match_dict['total_score']} > {SKIP_REWRITE_THRESHOLD}，跳过改写",
                 })
-                yield _sse("done", {"rewrites": 0})
+                yield _sse("done", {"rewrites": 0, "analysis_id": analysis_id})
                 return
 
             # Agent 3（LangGraph 图执行，queue 侧信道逐条推送）
@@ -269,9 +276,16 @@ async def analyze_stream(
                 await graph_task
             result = graph_task.result()
             observability.flush()
+            # 落库（SQLite 历史，session 粒度）
+            analysis_id = await db.save_analysis(
+                session_id=session_id, filename=getattr(file, "filename", None),
+                jd_digest=jd_text, total_score=match_dict.get("total_score", 0),
+                rewrites_count=rewrites_count, resume=resume_dict,
+                match=match_dict, rewrites=result.get("rewrites", []),
+            )
             yield _sse("progress", {"node": "rewriter", "status": "done", "count": rewrites_count})
             yield _sse("trace", {"trace": result.get("trace", []), "skipped": None})
-            yield _sse("done", {"rewrites": rewrites_count})
+            yield _sse("done", {"rewrites": rewrites_count, "analysis_id": analysis_id})
 
         except Exception as exc:
             yield _sse("error", {"detail": _llm_error_detail(exc)})
@@ -285,3 +299,20 @@ async def analyze_stream(
 
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@app.get("/api/history")
+async def history(session_id: str):
+    """历史记录列表（session 粒度，浏览器 localStorage 的 UUID）"""
+    if not session_id:
+        raise HTTPException(400, "session_id 必填")
+    return await db.list_history(session_id)
+
+
+@app.get("/api/history/{analysis_id}")
+async def history_detail(analysis_id: int):
+    """单条分析详情（回看结果用）"""
+    d = await db.get_analysis(analysis_id)
+    if not d:
+        raise HTTPException(404, "记录不存在")
+    return d
