@@ -14,8 +14,8 @@
 ```mermaid
 flowchart LR
     U[浏览器] --> FE[Next.js 前端<br/>上传页 · 结果页]
-    FE -- "POST /api/analyze" --> BE[FastAPI :8000<br/>SSE 流式推送]
-    BE -- SSE 逐字渲染 --> FE
+    FE -- "POST /api/analyze/stream" --> BE[FastAPI :8000<br/>SSE 流式推送]
+    BE -- SSE 逐条渲染 --> FE
     BE <--> DB[(SQLite<br/>历史记录)]
 
     subgraph LG [LangGraph StateGraph]
@@ -26,6 +26,12 @@ flowchart LR
     end
     BE --> LG
     LG -- "chat · JSON mode" --> LLM[DeepSeek LLM]
+
+    MCP[tools/mcp_server.py<br/>MCP server · FastMCP]
+    BE -. "MCP client · stdio<br/>parse_resume_pdf" .-> MCP
+
+    LF[Langfuse<br/>全链路 trace · token 成本]
+    LG -. "generation 埋点" .-> LF
 ```
 
 **为什么用 LangGraph 图编排而不是顺序调用**：节点间通过共享 State 传递数据；条件边声明式表达"高匹配度跳过改写"（省一次无效 LLM 调用）；每个节点执行路径与耗时落入 trace（可观测性）；未来加 Agent 只需 `add_node` + 接边，不改主干。
@@ -37,11 +43,13 @@ flowchart LR
 | 层 | 选型 |
 |---|---|
 | 前端 | Next.js 15（App Router）· Tailwind CSS 4 |
-| 后端 | FastAPI · Uvicorn |
+| 后端 | FastAPI · Uvicorn · SSE |
 | Agent 编排 | LangGraph（StateGraph 三节点 + 条件边） |
+| 工具协议 | **MCP**（FastMCP，`tools/mcp_server.py` 独立进程，主程序以 client 调用，失败自动降级进程内直调） |
+| 可观测性 | **Langfuse**（自部署 docker-compose，未配置 key 自动关闭） |
 | LLM | DeepSeek（OpenAI 兼容协议，JSON mode 结构化输出 + Pydantic 校验） |
 | 存储 | SQLite（按 session ID，无登录） |
-| 部署 | Docker Compose（D6 接入） |
+| 部署 | Docker Compose（含 Langfuse 服务栈） |
 
 ## 快速开始
 
@@ -87,14 +95,18 @@ curl -X POST http://127.0.0.1:8000/api/analyze -H "Content-Type: application/jso
 ```
 backend/
   app/
-    main.py            # FastAPI 入口：/health /ping/frontend /api/parse /api/analyze
+    main.py            # FastAPI 入口：/health /ping/frontend /api/parse /api/match /api/analyze(/stream)
     config.py          # 环境变量配置
     llm.py             # LLM 封装：stub 模式 / JSON mode / 解析重试
     pdf.py             # pdfplumber 提取：扫描件拒绝、双栏布局警告
     schemas.py         # Pydantic 契约 + 评分权重常量
+    mcp_client.py      # MCP client：stdio 连接工具 server，失败降级进程内直调
+    observability.py   # Langfuse 埋点：trace/generation，未配置自动关闭
     agents/            # 三个 Agent（parser / matcher / rewriter）
     graph/workflow.py  # LangGraph StateGraph 编排 + 条件边
-  tests/               # pytest（PDF 提取 / 边界 / 契约）
+  tools/
+    mcp_server.py      # MCP server（FastMCP）：parse_resume_pdf 工具，独立进程
+  tests/               # pytest（PDF 提取 / 边界 / 契约 / 路由）
 frontend/
   app/                 # Next.js App Router（page + /api/health）
   components/          # BackendStatus 后端探测卡片

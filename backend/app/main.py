@@ -7,16 +7,20 @@ D1 骨架验收：
 """
 import asyncio
 import json
+import tempfile
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from app import observability
 from app.agents.matcher_agent import match_jd
 from app.agents.parser_agent import parse_resume
 from app.config import settings
 from app.graph.workflow import build_graph
+from app.mcp_client import parse_resume_pdf_via_mcp
 from app.pdf import NotTextPDFError, extract_pdf
 from app.schemas import AnalyzeRequest, AnalyzeResponse
 
@@ -67,24 +71,25 @@ async def parse_endpoint(file: UploadFile = File(...)):
     if len(raw) > 10 * 1024 * 1024:
         raise HTTPException(413, "PDF 超过 10MB 上限")
 
+    # 定义书 v2：解析走 MCP（工具独立进程），失败自动降级进程内直调
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(raw)
+        tmp_path = tmp.name
     try:
-        extracted = extract_pdf(raw)
-    except NotTextPDFError as exc:
-        raise HTTPException(422, str(exc))
-
-    try:
-        resume = await parse_resume(extracted.text)
-    except ValueError as exc:
-        raise HTTPException(502, f"LLM 解析失败：{exc}")
-    except Exception as exc:  # LLM API 错误（余额不足 402 / 鉴权失败 401 / 限流 429 等）
+        result = await parse_resume_pdf_via_mcp(tmp_path)
+    except Exception as exc:
+        Path(tmp_path).unlink(missing_ok=True)
         raise HTTPException(502, _llm_error_detail(exc))
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
 
     return {
         "filename": file.filename,
-        "pages": extracted.pages,
-        "warnings": extracted.warnings,
-        "resume": resume,
+        "pages": result.get("pages"),
+        "warnings": result.get("warnings", []),
+        "resume": result["resume"],
         "stub_mode": not settings.api_key,
+        "via_mcp": result.get("via_mcp", True),
     }
 
 
@@ -198,17 +203,23 @@ async def analyze_stream(
 
     async def event_gen():
         queue: asyncio.Queue = asyncio.Queue()
+        import uuid
+        trace = observability.start_trace(
+            session_id=str(uuid.uuid4())[:8], jd_digest=jd_text
+        )
         yield _sse("progress", {"node": "parser", "status": "running"})
 
         try:
             # Agent 1
-            resume_dict = await parse_resume(resume_text)
+            with observability.observe_generation(trace, "parser", "parser-v2", settings.model):
+                resume_dict = await parse_resume(resume_text)
             yield _sse("progress", {"node": "parser", "status": "done"})
             yield _sse("resume", {"data": resume_dict, "warnings": warnings})
 
             # Agent 2
             yield _sse("progress", {"node": "matcher", "status": "running"})
-            match_dict = await match_jd(resume_dict, jd_text)
+            with observability.observe_generation(trace, "matcher", "matcher-v2", settings.model):
+                match_dict = await match_jd(resume_dict, jd_text)
             yield _sse("progress", {"node": "matcher", "status": "done"})
             yield _sse("match", match_dict)
 
@@ -257,6 +268,7 @@ async def analyze_stream(
             if not graph_task.done():
                 await graph_task
             result = graph_task.result()
+            observability.flush()
             yield _sse("progress", {"node": "rewriter", "status": "done", "count": rewrites_count})
             yield _sse("trace", {"trace": result.get("trace", []), "skipped": None})
             yield _sse("done", {"rewrites": rewrites_count})

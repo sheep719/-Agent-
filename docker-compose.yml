@@ -1,0 +1,37 @@
+services:
+  langfuse-server:
+    image: docker.io/langfuse/langfuse:3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3001:3000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/langfuse
+      NEXTAUTH_URL: http://localhost:3001
+      NEXTAUTH_SECRET: change-me-random-secret
+      SALT: change-me-random-salt
+      ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      TELEMETRY_ENABLED: "false"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/public/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  postgres:
+    image: docker.io/postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  langfuse-postgres:
