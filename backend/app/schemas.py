@@ -1,6 +1,8 @@
 """Pydantic 数据模型：三个 Agent 的输入/输出契约 + 评分权重常量"""
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 # ---- 评分模型常量（权重可配置）----
 WEIGHTS = {
@@ -30,11 +32,11 @@ class ResumeStructured(BaseModel):
 
 # ---- Agent 2 · 匹配器输出 ----
 class JDRequirement(BaseModel):
-    category: str      # hard_skill / project / education / bonus
+    category: Literal["hard_skill", "project", "education", "bonus"]
     requirement: str
-    status: str        # hit / partial / miss
-    evidence: str      # 简历原文引用（可解释评分的核心）
-    score: float = 0   # 0-100
+    status: Literal["hit", "partial", "miss"]  # 命中/部分/缺失
+    evidence: str      # 简历原文引用（可解释评分的核心），miss 时为空
+    score: float = Field(ge=0, le=100)
 
 
 class MatchResult(BaseModel):
