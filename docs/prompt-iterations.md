@@ -31,4 +31,8 @@
 - Pydantic `ResumeStructured` 校验，失败把 ValidationError 喂回 LLM 自纠，最多重试 2 次
 - `chat_json` 层面：JSON 解析失败自动重试 1 次（D1 已有）
 
-**效果**：待 DEEPSEEK_API_KEY 配置后，用 `tests/fixtures/my_resume.pdf` 实测记录。
+**实测效果**（2026-10-16，deepseek-chat，真机）：
+- 样本：`tests/fixtures/my_resume.pdf`（单栏，382 字符，1 页）
+- 结果：**1 次调用成功，无重试，耗时 1.76s**
+- 四段全对：教育（学校/学历/起止时间完整）；两段经历（量化数字 92→118、52→71、20/17 课时全部保留无编造）；技能 3 条带应用场景；projects 正确输出空数组（简历无项目段，"找不到给空数组"规则生效）
+- 费用意识：单次解析约 600 token 输入 + 300 token 输出，按 DeepSeek 价格约 ¥0.001/次——测试阶段控制调用次数，开发期用 stub，验收时才真机
